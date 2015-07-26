@@ -5,18 +5,229 @@ date: "Sunday, July 26, 2015"
 output: html_document
 ---
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+This report covers assignment 2 for the Reproducible Research class offered by Coursera.
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+Top Weather Event Damage Analysis For the U.S. Covering both Human Health and Property Damage
+============================================================================================
 
-```{r}
-summary(cars)
+## Synopsis 
+The U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database was analysed to find the most harmfull storm events to Population Health as well as the most costly storm events to Property Damage and Crop Damage.  For accuracy purposes, only the last 10 years of data was used. This covers 2001 through 2011. Prior years had significanly lower events recorded. 
+
+Population Health, in terms of Death and Injury quantities, was most strongly impacted by `Tornados` and the total of Property and Crop Damage was most strongly impacted by `Floods`
+
+## Introduction
+
+Storms and other severe weather events can cause both public health and economic problems for communities and municipalities. Many severe events can result in fatalities, injuries, and property damage, and preventing such outcomes to the extent possible is a key concern.
+
+This project involves exploring the U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database. This database tracks characteristics of major storms and weather events in the United States, including when and where they occur, as well as estimates of any fatalities, injuries, and property damage.
+
+Specificaly, this analysis will look at both impacts to human health and impact to property damage across all the US.
+
+## Data
+
+The data for amalysis comes from NOOA and is in the form of a comma-separated-value file compressed via the bzip2 algorithm to reduce its size. It  can download the file from the course web site:
+
+- [Storm Data](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2) [47Mb]
+
+There is also some documentation of the database available. Here you will find how some of the variables are constructed/defined.
+
+- National Weather Service [Storm Data Documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf)
+
+- National Climatic Data Center Storm Events [FAQ](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2FNCDC%20Storm%20Events-FAQ%20Page.pdf)
+
+The events in the database start in the year 1950 and end in November 2011. In the earlier years of the database there are generally fewer events recorded, most likely due to a lack of good records. More recent years should be considered more complete.
+
+## Data Processing
+
+First a set of libraries are loaded so that the rest of the code will run correctly.
+```{r, message=FALSE}
+library("tidyr")
+library("dplyr")
+library("lubridate")
+library(data.table)
+library(ggplot2)
+library(scales)
 ```
 
-You can also embed plots, for example:
+Using the link from above the data can be loaded as folows
+```{r, message=FALSE,cache=TRUE}
+# if the file does not exist download it
+if (!file.exists("StormData.csv.bz2")) {
+    fileUrl <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+    download.file(fileUrl, destfile="StormData.csv.bz2", mode="wb")
+}
 
-```{r, echo=FALSE}
-plot(cars)
+# Read the compressed file into memory
+StormData <- suppressWarnings(read.csv("StormData.csv.bz2",stringsAsFactors=FALSE))
+
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+The resulting data.frame has `r ncol(StormData)` variables that are shown below:
+
+```{r, message=FALSE,cache=TRUE}
+ncol(StormData)
+glimpse(StormData)
+```
+
+The column `EVTYPE` contains the *Event Type* descriptions that we will be using to evalute the 'damage' by. 
+
+First lets fix the *Begining Data* variable `BGN_DATE` and convert it into a Date Time class so we can evalute the stability of data recording by Year.
+
+```{r, message=FALSE,cache=TRUE}
+StormData$BGN_DATE <- mdy_hms(StormData$BGN_DATE)
+```
+Now, summarizing the counts of recorded events by year one can clearly see a maked increase in the mid 1990s.  I believe this is do to data recording improvments and hence it drastically improved not only the data quality but the amount of data that was recorded.  
+
+For this analysis, I therefor am limiting my analysis from the period of 2001 through 2011.  This analysis will then be a reflection of what has happened in the last 10 years of ths data set.
+
+```{r, message=FALSE,fig.width=12}
+# count rows by year
+storm_year <- StormData %>% mutate(YEAR=year(BGN_DATE)) %>% group_by(YEAR) %>% summarize(rows=n())
+
+# Plot results
+qplot(x=YEAR,y=rows, data=storm_year,main="QTY or Rows by Reporting Year")
+```
+
+We will not filter the data to only the newest 10 years from 2001 through 2011
+```{r, message=FALSE}
+sd_new <- StormData %>% mutate(YEAR=year(BGN_DATE)) %>% 
+                 filter(YEAR >= "2001") 
+```
+
+Lets now look at the main grouping variable that will be used in this analysis `EVTYPE` to check on how clean this has been recorded in the data.
+```{r, message=FALSE}
+event_counts <- sd_new %>% group_by(EVTYPE) %>% 
+    summarize(Deaths=sum(FATALITIES), Injuries=sum(INJURIES))
+nrow(event_counts)
+```
+Reading the data set documentation linked above, there should be only 48 primary Event Types not the `r nrow(event_counts)` found here.  We therefore need to try and clean up some of the Event Type discriptors. 
+
+Afet manually looking through the list in data.frame `event_counts`, I found that a set of quick relableing would fix ~90% of the errors. Since some of these errors were for very small inignicant Events, I also chose to ignore some cases.  The following code corrects most of the Event Type lables.
+
+```{r, message=FALSE,cache=TRUE}
+# patch up most of the big Event Types for the newer data
+sd_new$EVTYPE <- gsub("/", " ", sd_new$EVTYPE) 
+sd_new$EVTYPE[grep("WINTER WEATHER MIX|WINTER WEATHER/MIX", sd_new$EVTYPE)] <- "WINTER WEATHER"
+sd_new$EVTYPE[grep("^WILD", sd_new$EVTYPE)] <- "WILDFIRE"
+sd_new$EVTYPE[grep("^MARINE TS", sd_new$EVTYPE)] <- "MARINE THUNDERSTORM WIND"
+sd_new$EVTYPE[grep("^TSTM", sd_new$EVTYPE)] <- "TROPICAL STORM"
+sd_new$EVTYPE[grep("^THUNDERSTORM", sd_new$EVTYPE)] <- "THUNDERSTORM WIND"
+sd_new$EVTYPE[grep("^STRONG WIND", sd_new$EVTYPE)] <- "STRONG WIND"
+sd_new$EVTYPE[grep("^STORM SURGE", sd_new$EVTYPE)] <- "STORM SURGE TIDE"
+sd_new$EVTYPE[grep("^RIP CURRENT", sd_new$EVTYPE)] <- "RIP CURRENT"
+sd_new$EVTYPE[grep("^HURRICANE", sd_new$EVTYPE)] <- "HURRICANE"
+sd_new$EVTYPE[grep("^HEAVY SURF", sd_new$EVTYPE)] <- "HIGH SURF"
+sd_new$EVTYPE[grep("^EXTREME COLD|^EXTREME WINDCHIL", sd_new$EVTYPE)] <- "EXTREME COLD"
+sd_new$EVTYPE[grep("^COLD WEATHERL", sd_new$EVTYPE)] <- "COLD WIND CHILL"
+sd_new$EVTYPE[grep("^COASTAL FLOOD", sd_new$EVTYPE)] <- "COASTAL FLOOD"
+sd_new$EVTYPE[grep("^MUD", sd_new$EVTYPE)] <- "MUD SLIDE"
+sd_new$EVTYPE[grep("^LAKE EFFECT SNOW", sd_new$EVTYPE)] <- "LAKE-EFFECT SNOW"
+sd_new$EVTYPE[grep("^GUSTY WIND", sd_new$EVTYPE)] <- "GUSTY WINDS"
+sd_new$EVTYPE[grep("^HIGH SURF", sd_new$EVTYPE)] <- "HIGH SURF"
+
+# Now lets count the number of distinct Event Types again
+event_counts <- sd_new %>% group_by(EVTYPE) %>% 
+    summarize(Deaths=sum(FATALITIES), Injuries=sum(INJURIES))
+nrow(event_counts)
+```
+
+Now lets create a data set looking at Health related impact. This would be variable `FATALITIES` and `INJURIES`.  To reduce the data set further we will remove any record that does not have either a fatality or an injury and will store this as the `sd_health` data.frame.
+
+```{r, message=FALSE,cache=TRUE}
+sd_health <- sd_new %>% filter(FATALITIES > 0 | INJURIES > 0)
+
+# looking at how many Events we capture now
+event_counts <- sd_health %>% group_by(EVTYPE) %>% 
+                  summarize(Deaths=sum(FATALITIES), Injuries=sum(INJURIES))
+
+nrow(event_counts)
+```
+We can see that at this point we only have `r nrow(event_counts)` distinct Event Types left for this Health data set.
+
+We will do the same thing for the Property Damage and Crop Damage variable `PROPDMG` and `CROPDMG` removing any entries with no damage for both property and crops. 
+
+```{r, message=FALSE,cache=TRUE}
+sd_damage <- sd_new %>% filter(PROPDMG > 0 | CROPDMG > 0)
+```
+Damage variables have a unit measure field for each called `PROPDMGEXP` and `CROPDMGEXP` for property and crops repsectivly. Lets look at the range of values for each.
+
+```{r, message=FALSE,cache=TRUE}
+sd_damage %>% group_by(PROPDMGEXP) %>% summarize(qty=n())
+sd_damage %>% group_by(CROPDMGEXP) %>% summarize(qty=n())
+```
+
+We will now create a sepperate column converting the letters to equivelent numbers to the power of 10.  We then will use this mulitplier to convert the Damage numbers into a cost variables `PROPDMGCOST` and `CROPDMGCOST`.
+
+```{r, message=FALSE,cache=TRUE}
+# convert to leters to Unit multipliers
+sd_damage$PROPDMGX[sd_damage$PROPDMGEXP=="B"] <- 10^9
+sd_damage$PROPDMGX[sd_damage$PROPDMGEXP=="M"] <- 10^6
+sd_damage$PROPDMGX[sd_damage$PROPDMGEXP=="K"] <- 10^3
+sd_damage$PROPDMGX[is.na(sd_damage$PROPDMGX)] <- 1
+sd_damage$PROPDMGCOST <- sd_damage$PROPDMG * sd_damage$PROPDMGX
+
+sd_damage$CROPDMGX[sd_damage$CROPDMGEXP=="B"] <- 10^9
+sd_damage$CROPDMGX[sd_damage$CROPDMGEXP=="M"] <- 10^6
+sd_damage$CROPDMGX[sd_damage$CROPDMGEXP=="K"] <- 10^3
+sd_damage$CROPDMGX[is.na(sd_damage$CROPDMGX)] <- 1
+sd_damage$CROPDMGCOST <- sd_damage$CROPDMG * sd_damage$CROPDMGX
+```
+With the source data cleaned up and filtered, We can now procede to the analysis and results.
+
+##Results
+1. **Which types of events are most harmful with respect to population health?**
+
+For this analysis we need to summarize the number of Deaths and Injuries for the time period identified above. We will look at the top 5 events by the quantitiy of events and graph a stacked bar chart of both Deaths and Injuries.
+
+```{r, message=FALSE,cache=TRUE,fig.width=12,fig.height=7}
+# summarize by Event Type and sum events
+event_counts <- sd_health %>% group_by(EVTYPE) %>% 
+                  summarize(Deaths=sum(FATALITIES), Injuries=sum(INJURIES))
+
+# pull out the top 5
+top_events <- event_counts %>% top_n(5) %>% 
+                  arrange(desc(Injuries)) %>% 
+                  rename(Event = EVTYPE) %>% 
+                  gather(Impact, QTY, -Event) 
+
+# order by QTY
+top_events <- transform(top_events, 
+                          Event = reorder(Event, order(QTY, decreasing = TRUE)))
+
+# and plot
+g <- ggplot(data=top_events, aes(x=Event, y=QTY, fill=Impact)) + geom_bar(stat="identity")   
+g <- g + ggtitle("Most Harmfull Weather Events to Health In the U.S. from 2001 to 2011\n")
+g + theme(plot.title = element_text(lineheight=.8, face="bold"))
+```
+
+Here we see that `Tornados` are the most impactfull to population health.
+
+2. **Which types of events have the greatest economic consequences?**
+
+This analysis is simular but focusses on the cost of Damage to both Crops and Property. In the Data Processing these variables were computed and using both the number and scalling values.  This allows us to summ the resulting cost just like before and plot a stacked bar chart for both damage types.
+
+```{r, message=FALSE,cache=TRUE,fig.width=12,fig.height=7}
+# summarize by Event Type and sum costs
+event_costs <- sd_damage %>% group_by(EVTYPE) %>% 
+    summarize(Property=sum(PROPDMGCOST), Crops=sum(CROPDMGCOST))
+
+# pull out the top 5
+top_events <- event_costs %>% top_n(5,Property) %>% 
+    arrange(desc(Property)) %>% 
+    rename(Event = EVTYPE) %>% 
+    gather(Impact, QTY, -Event) 
+
+# order by QTY
+top_events <- transform(top_events, 
+                        Event = reorder(Event, order(QTY, decreasing = TRUE)))
+# and plot
+g <- ggplot(data=top_events, aes(x=Event, y=QTY, fill=Impact)) + geom_bar(stat="identity")   
+g <- g + ggtitle(" Weather Events with the Largest Economic Impact In the U.S. from 2001 to 2011\n")
+g <- g + theme(plot.title = element_text(lineheight=.8, face="bold")) 
+g + labs( y = "Damage in $") + scale_y_continuous(labels=dollar)
+
+```
+Here we see that `Floods` are the greatest economic consequences.
+
+
+> The End
